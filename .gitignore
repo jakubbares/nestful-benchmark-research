@@ -1,0 +1,27 @@
+# SSH keys / AWS instance metadata — never commit
+nestful-qwen3-4b/infra-keys/
+
+# Raw per-sample model output logs (large, regeneratable by rerunning scripts/run_matched.py)
+nestful-qwen3-4b/matched_results/
+nestful-qwen3-4b/results/
+
+# IBM's public NESTFUL repo — clone it yourself per viewer/README.md, don't duplicate
+nestful-qwen3-4b/viewer/NESTFUL/
+
+# Large intermediate artifacts, regeneratable via viewer/README.md's rebuild steps
+nestful-qwen3-4b/viewer/payload.json
+nestful-qwen3-4b/viewer/payload.b64
+nestful-qwen3-4b/viewer/scored.json
+
+# Local smoke-test screenshots, not a deliverable
+nestful-qwen3-4b/viewer/shot_*.png
+
+# Superseded backup, nestful_explorer.html is the canonical dashboard
+nestful-qwen3-4b/nestful_dashboard_v4_backup.html
+
+# Personal scratch notes, not part of the benchmark work
+kk.md
+
+__pycache__/
+*.pyc
+.DS_Store
