@@ -13,7 +13,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 NESTFUL = os.path.join(HERE, "NESTFUL")
 sys.path.insert(0, os.path.join(HERE, "shim"))
 sys.path.insert(0, os.path.join(NESTFUL, "src"))
-from output_parsers import parse_Hammer2_0_7b, parse_xLAM_1b_fc_r   # noqa: E402
+# Use score_all.py's fence-tag-aware wrapped parsers (not IBM's raw ones) so
+# F1 inputs use the same corrected parsing as every other metric here - see
+# score_all.py's _FENCE_TAG comment for why (a ```json-tagged fence, which
+# IBM's own .replace("```", "") doesn't fully strip, silently understated
+# Qwen3-Instruct's numbers throughout this project until found 2026-09-02).
+from score_all import parse_Hammer2_0_7b, parse_xLAM_1b_fc_r, _FENCE_TAG   # noqa: E402
 from utils import compute_score_sklearn         # noqa: E402
 
 sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
@@ -129,12 +134,24 @@ RUNS = [
                + " · vLLM 0.8.5 · transformers 4.51.1 · own {\"tool_calls\":[...]} template, not Hammer's"
                + " · max_tokens 2000 (raised from 1000) · +output checklist prompt",
          parser="xlam"),
+    dict(key="qwen3_3shot_checklist", label="Qwen3-4B-Instruct-2507 · 3-shot + checklist", short="Qwen3-Instruct 3-shot +checklist",
+         model="Qwen3-4B-Instruct-2507", shots=3, side="ours", tier="checklist",
+         path="matched_results/qwen3_3shot_checklist/output.jsonl", rev="cdbee75f",
+         infra=MATCHED + " · vLLM 0.8.5 · transformers 4.51.1 · +output checklist prompt"),
+    dict(key="qwen3thinking_3shot_checklist", label="Qwen3-4B-Thinking-2507 · 3-shot + checklist", short="Thinking 3-shot +checklist",
+         model="Qwen3-4B-Thinking-2507", shots=3, side="ours", tier="checklist",
+         path="matched_results/qwen3thinking_3shot_checklist/output.jsonl", rev="768f209d",
+         infra=MATCHED.replace("ctx 8192", "ctx 20000").replace("batch 32", "batch 16")
+               + " · vLLM 0.8.5 · transformers 4.51.1 · max_tokens 16000 · <think> stripped before scoring"
+               + " · +output checklist prompt"),
 ]
 
 # Pairs the dashboard's checklist card diffs baseline -> checklist for.
 CHECKLIST_PAIRS = [
     ("hammer_3shot", "hammer_3shot_checklist"),
     ("xlam_3shot", "xlam_3shot_checklist"),
+    ("qwen3_3shot", "qwen3_3shot_checklist"),
+    ("qwen3thinking_3shot", "qwen3thinking_3shot_checklist"),
 ]
 
 # ------------------------------------------------------------------ dataset --
@@ -338,7 +355,7 @@ def missing_label_rate(path, parser_key):
     for line in open(os.path.join(RUN_ROOT, path)):
         item = json.loads(line)
         n += 1
-        raw = item["generated_text"].replace("```", "").strip()
+        raw = _FENCE_TAG.sub("", item["generated_text"]).strip()
         try:
             parsed = json.loads(raw)
         except Exception:

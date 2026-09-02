@@ -50,6 +50,8 @@ for (const [rel, shots, model, checklist] of [
   ['matched_results/qwen3thinking_1shot/output.jsonl',1,'Qwen3-4B-Thinking-2507',false],
   ['matched_results/hammer_3shot_checklist/output.jsonl',3,'Hammer2.0-7b',true],
   ['matched_results/xlam_3shot_checklist/output.jsonl',3,'xLAM-7b-fc-r',true],
+  ['matched_results/qwen3_3shot_checklist/output.jsonl',3,'Qwen3-4B-Instruct-2507',true],
+  ['matched_results/qwen3thinking_3shot_checklist/output.jsonl',3,'Qwen3-4B-Thinking-2507',true],
 ]){
   let ok=0, bad=0, firstBad=null;
   const rl = readline.createInterface({input: fs.createReadStream(ROOT+rel), crlfDelay: Infinity});

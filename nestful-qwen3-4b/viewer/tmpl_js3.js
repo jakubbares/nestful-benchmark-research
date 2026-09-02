@@ -185,13 +185,22 @@ function renderOverview(){
         <td class="num">${pct(c.missing_label.base)} &rarr; ${pct(c.missing_label.checklist)}</td></tr>`;
     }
     h+=`</tbody></table>
-      <div class="note" style="margin-top:14px"><b>Reading this:</b> Win Rate improves significantly for both models
-        (Hammer +5.4pp, xLAM +3.1pp, both p&lt;0.001) and refusals collapse for Hammer (16.0%&rarr;2.4%,
-        p&lt;0.001) — direct evidence the checklist's "never refuse" and "every call needs a label" items work.
-        Hammer's Full Acc dips slightly (&minus;1.0pp, p=0.045) even as Win Rate rises — the checklist makes answers
-        more likely to reach the <em>correct value</em> by an alternate valid path, not more likely to reproduce
-        gold's exact call sequence. xLAM's missing-label rate falls but stays high (38.4%&rarr;29.8%) — a real,
-        only-partial fix, reported as such rather than rounded up to "solved."</div></div></div>`;
+      <div class="note" style="margin-top:14px"><b>Reading this:</b> the checklist is not a uniform win. It
+        significantly <em>helps</em> Win Rate for three of four models — Hammer +5.4pp, xLAM +3.1pp, Thinking
+        +2.6pp (all p&lt;0.001) — and refusals collapse everywhere (Hammer 16.0%&rarr;2.4%, Thinking
+        6.3%&rarr;1.5%, both p&lt;0.001). But it significantly <em>hurts</em> Qwen3-Instruct's Win Rate
+        (&minus;1.6pp, p=0.042) and Full Acc (&minus;2.5pp, p&lt;0.001) despite also cutting its refusals
+        (10.6%&rarr;3.7%, p&lt;0.001) — traced to real generations, not a scoring artifact: of 636 samples
+        Qwen3-Instruct got right at baseline, 110 flip to wrong under the checklist (mostly new wrong answers or
+        execution errors, not parse failures), against only 81 previously-wrong samples it newly gets right.
+        Qwen3-Instruct also never had much of a missing-label problem to begin with (0.1% at baseline, vs. Hammer's
+        8.4% and xLAM's 38.4%) — the checklist's core fix targets a failure mode this model barely has, while its
+        "never refuse" item still pushes it into attempting hard cases it would otherwise have correctly avoided.
+        Hammer's Full Acc also dips slightly (&minus;1.0pp, p=0.045) even as its Win Rate rises — the checklist makes
+        answers more likely to reach the <em>correct value</em> by an alternate valid path, not more likely to
+        reproduce gold's exact call sequence. xLAM's missing-label rate falls but stays high (38.4%&rarr;29.8%) — a
+        real, only-partial fix, reported as such rather than rounded up to "solved." Net: worth keeping for Hammer,
+        xLAM and Thinking; not recommended as-is for Qwen3-Instruct.</div></div></div>`;
   }
 
   /* vs. paper — direct comparison for the models we actually reproduced */

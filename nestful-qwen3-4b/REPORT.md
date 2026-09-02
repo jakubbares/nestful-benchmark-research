@@ -1,8 +1,57 @@
-# NESTFUL × Qwen3-4B — Reproduction Report (v5: +evidence-based output checklist)
+# NESTFUL × Qwen3-4B — Reproduction Report (v6: parser-gap correction + checklist on all 4 models)
 
-**Dates:** 2026-08-21 (initial inference), 2026-08-26 (validation + correction), 2026-08-26/27 (matched-infra rerun + audit fixes), 2026-08-30/31 (+xLAM-7b-fc-r, +Qwen3-4B-Thinking-2507), 2026-09-01 (+evidence-based output checklist)
+**Dates:** 2026-08-21 (initial inference), 2026-08-26 (validation + correction), 2026-08-26/27 (matched-infra rerun + audit fixes), 2026-08-30/31 (+xLAM-7b-fc-r, +Qwen3-4B-Thinking-2507), 2026-09-01 (+evidence-based output checklist), 2026-09-02 (+checklist on Qwen3-Instruct/Thinking, found + fixed a parser gap that affected every prior Qwen3-Instruct number)
 **Models:** `Qwen/Qwen3-4B-Instruct-2507` @ `cdbee75f`, `Qwen/Qwen3-4B-Thinking-2507` @ `768f209d`, `MadeAgents/Hammer2.0-7b` @ `2e267cc2`, `Salesforce/xLAM-7b-fc-r` (all pinned)
 **Benchmark:** NESTFUL, official GitHub code + data (github.com/IBM/NESTFUL), full dataset, 1861 samples
+
+---
+
+## v6 correction: a parsing gap silently understated every Qwen3-Instruct number in this report
+
+Extending the v5 checklist experiment to Qwen3-Instruct produced a surprising result: Win Rate looked like it *dropped* under the checklist. Before reporting that, the raw generations were inspected directly — the same discipline that has driven every version of this report.
+
+**What was found:** IBM's own official parser strips markdown fences with `generated_text.replace("```", "")`. That handles a bare ` ``` ` fence but leaves a language tag behind: ` ```json\n[...] ` becomes `json\n[...]` — not valid JSON, so `json.loads()` raises and the sample is scored as a parse failure. Qwen3-Instruct (never Hammer, xLAM, or Qwen3-Thinking) sometimes emits ` ```json `-tagged fences instead of bare ones — including in the **already-published** `qwen3_3shot` baseline (60/1861 = 3.2% of samples). This has been silently understating Qwen3-Instruct's Partial/Full/Win numbers in every version of this report since v1.
+
+**The fix:** `score_all.py` now strips any ` ```<language> ` fence (regex `` ```[a-zA-Z]* ``), not just a bare ` ``` `, and the same fix went into the refusal-detection logic and `build_payload.py`'s F1 computation. **Verified inert everywhere it should be:** re-scored all 15 runs with the fix and diffed against the unpatched numbers — Hammer, xLAM, and Qwen3-Thinking runs are exactly 0.0000 different on every metric; only the four Qwen3-Instruct(-based) runs changed.
+
+**Corrected numbers** (previously published → corrected, 3-shot):
+
+| Metric | qwen3_3shot (published) | qwen3_3shot (corrected) | Δ |
+|---|---|---|---|
+| Partial Acc | 0.290 | 0.320 | +3.0pp |
+| Full Acc | 0.207 | 0.234 | +2.7pp |
+| Win Rate | 0.318 | 0.342 | +2.4pp |
+| Parse fail | 0.147 | 0.115 | −3.2pp |
+| Refusal | 0.106 | 0.106 | unchanged |
+
+Refusal is untouched (a bare `[]` never carries a language tag), and F1 Func rises too (0.855→0.975) for the same reason, though F1 remains untrusted for the structural reasons discussed below regardless. The correction is one-directional and monotonic: Qwen3-Instruct's true performance was always at least as good as what was previously reported, never worse — every downstream comparison that already favored Qwen3-Instruct over Hammer (v3's headline finding) gets *stronger*, not weaker, under the fix. Every table below reflects the corrected numbers; see "Files" for exactly which script changed.
+
+**Why this survived four prior report versions:** every earlier version's manual raw-generation spot-checks happened to sample outputs that didn't hit this fence style, and the byte-exact prompt-reconstruction test suite (`prompt_test.mjs`) checks *prompts*, not *parsing* — it was never positioned to catch a scoring-side bug like this one. Caught only because the v6 checklist experiment produced a result unusual enough (a metric moving the "wrong" direction) to trigger a direct inspection of the raw text, which is the same mechanism that caught every other bug in this report's history. Lesson generalized into takeaway #11 below.
+
+---
+
+## v6: the checklist, extended to all four models — a genuinely mixed result
+
+v5 tested the 7-item output checklist (see below) on Hammer and xLAM only. Extending it to Qwen3-Instruct and Qwen3-Thinking — using the corrected parser above for a fair before/after on both sides — gives a result that is **not** "the checklist works":
+
+| Model (3-shot) | Metric | Baseline | +Checklist | Δ | p |
+|---|---|---|---|---|---|
+| Qwen3-4B-Instruct | Partial Acc | 32.0% | 31.4% | −0.5pp | — |
+| Qwen3-4B-Instruct | Full Acc | 23.4% | 20.9% | **−2.5pp** | 0.0000 |
+| Qwen3-4B-Instruct | **Win Rate** | 34.2% | 32.6% | **−1.6pp** | 0.042 |
+| Qwen3-4B-Instruct | Refusal | 10.6% | 3.7% | −6.9pp | 0.0000 |
+| Qwen3-4B-Instruct | Parse fail | 11.5% | 4.9% | −6.5pp | — |
+| Qwen3-4B-Thinking | Partial Acc | 38.5% | 39.7% | +1.2pp | — |
+| Qwen3-4B-Thinking | Full Acc | 26.3% | 26.9% | +0.6pp | 0.462 (n.s.) |
+| Qwen3-4B-Thinking | **Win Rate** | 76.0% | 78.7% | **+2.6pp** | 0.0005 |
+| Qwen3-4B-Thinking | Refusal | 6.3% | 1.5% | −4.9pp | 0.0000 |
+| Qwen3-4B-Thinking | Parse fail | 6.3% | 1.5% | −4.9pp | — |
+
+Combined with v5: the checklist significantly **improves** Win Rate for Hammer (+5.4pp), xLAM (+3.1pp), and Qwen3-Thinking (+2.6pp) — three of four models — and **significantly hurts** Qwen3-Instruct's Win Rate (−1.6pp, p=0.042) and Full Acc (−2.5pp, p<0.001), despite also cutting its refusal rate by more than half.
+
+**Why Qwen3-Instruct is the exception, traced to real generations (not a parsing artifact — checked directly, given the v6 correction above made exactly this kind of false alarm plausible):** of the 636 samples Qwen3-Instruct won at baseline, 110 flip to a loss under the checklist (68 new wrong answers, 39 new execution errors, only 3 new parse failures — genuine regressions, not fence-tag noise); only 81 previously-lost samples flip to a win, for a net loss of 29 samples (−1.6pp). Of the 197 baseline refusals, forcing "never refuse" produces a *correct* answer only 13 times (6.6%) — mostly it just converts a refusal into a new wrong attempt. And unlike Hammer (8.4% missing-label rate) and xLAM (38.4%), Qwen3-Instruct barely had the checklist's core target problem to begin with (0.1% missing-label rate at baseline) — so the checklist's main lever has nothing to pull for this model, while its "never refuse" item still pushes it into attempting cases it would otherwise have correctly declined.
+
+**Net recommendation:** keep the checklist for Hammer, xLAM, and Qwen3-Thinking; do not apply it as-is to Qwen3-Instruct. This is visible in the dashboard's Overview tab, same card as v5, now with all four models and an updated "Reading this" note.
 
 ---
 
@@ -42,7 +91,7 @@ The trigger for this round was a complaint that the model was "putting in wrong 
 - xLAM's missing-label rate falls meaningfully but stays high (38.4%→29.8%) — a real, partial fix for xLAM's dominant failure mode, not a solved problem. Its refusal reduction is not statistically significant, but it was already near zero at baseline (0.3%) so there was little room to move.
 - **A genuine scoring-pipeline bug surfaced along the way:** one xLAM+checklist sample's predicted call chain executed to a valid Python integer with over 4,300 digits (a runaway computation), which crashed `score_all.py`'s JSON serialization — Python 3.11+'s int→str conversion guard rejects converting integers that large to text at all, including via `repr()`. Fixed by reporting the value's bit-length instead of stringifying it, so the scorer no longer has to convert the number to text to describe it. A real edge case in the scoring code, caught and fixed rather than silently dropping that sample.
 
-**What this does and doesn't establish:** one confirmed, evidence-based prompt fix, tested on 2 of the report's four models at one shot-count (3-shot). Not a claim that every failure mode is now fixed, and not tested on Qwen3-Instruct/Thinking (their baseline missing-label/refusal rates weren't what triggered this investigation). Visible in the dashboard's Overview tab under "Does an explicit output checklist fix the errors we found?"
+**What this does and doesn't establish:** one confirmed, evidence-based prompt fix, tested here on 2 of the report's four models at one shot-count (3-shot) — extended to the remaining two (Qwen3-Instruct, Qwen3-Thinking) in v6 above, with a genuinely mixed result. Visible in the dashboard's Overview tab under "Does an explicit output checklist fix the errors we found?"
 
 ---
 
@@ -54,9 +103,11 @@ v3's conclusion — "metric-dependent split, not a blowout" — held for **Qwen3
 
 | Comparison (3-shot, Win Rate, McNemar's exact) | Thinking wins | Other wins | p-value |
 |---|---|---|---|
-| Thinking vs. Qwen3-Instruct (same model, reasoning on vs. off) | 891 | 68 | ≈0.000000 |
+| Thinking vs. Qwen3-Instruct (same model, reasoning on vs. off) | 857 | 78 | ≈0.000000 |
 | Thinking vs. Hammer2.0-7b (paper's best model) | 1001 | 56 | ≈0.000000 |
-| Thinking vs. xLAM-7b-fc-r (paper model) | 1415 | 1 | ≈0.000000 |
+| Thinking vs. xLAM-7b-fc-r (paper model) | 1207 | 54 | ≈0.000000 |
+
+(Updated 2026-09-02: the Instruct row reflects the v6 parser-gap correction below. The xLAM row was independently wrong before this update — re-derived with the exact same discordant-pair method that reproduces the Hammer row unchanged, confirming that row, unlike xLAM's, was never affected by the parser gap.)
 
 This is not the "genuine tie on one metric, real-but-modest edge on another" story from v3 — turning reasoning on turns a roughly-tied 4B model into one that wins the overwhelming majority of head-to-head disagreements against every other model in this investigation, including the paper's actual top performer. See "Getting the Thinking-mode measurement right" below for how this number was nearly reported wrong (a truncation artifact inflated it, then a stale-script bug invalidated the first correct-looking version) before landing on a verified, reproducible result.
 
@@ -64,11 +115,11 @@ This is not the "genuine tie on one metric, real-but-modest edge on another" sto
 
 Two earlier passes at this report each found a problem with the one before it. v1 claimed Qwen3-4B "beat every model in the paper's Table 1." v2 found that claim invalid — a validation run showed the paper's own best model doesn't reproduce its own published F1 numbers either — and retracted it, replacing it with a smaller same-day comparison. A subsequent self-audit then found ~24 additional ways that v2's comparison could still be broken (infra asymmetries, unverified determinism, unpinned model revisions, a real domain confound, latent scorer bugs, no significance testing). v3 fixed every one of those that was actually fixable by re-running both models on identical infrastructure and adding the missing analysis:
 
-- **Full Sequence Match** (exact function names + exact arguments, in order), Qwen3-Instruct vs. Hammer: genuinely a statistical tie. McNemar's exact test, p = 0.0998 — not significant.
-- **Win Rate**, Qwen3-Instruct vs. Hammer: **Qwen3-4B-Instruct has a real, statistically significant advantage.** McNemar's exact test, p ≈ 0.00000. Of 406 examples where the two models disagree, Qwen3 wins 264 and Hammer wins only 142.
-- **F1 Func/Param**: Hammer is numerically ahead (0.971/0.700 vs. 0.855/0.658), but this metric was independently found to be structurally unstable (see below) — no significance test is reported for it because the metric itself isn't trusted enough to warrant one.
+- **Full Sequence Match** (exact function names + exact arguments, in order), Qwen3-Instruct vs. Hammer: a small but real Qwen3 edge, not a tie. McNemar's exact test, p = 0.0072 — significant (corrected 2026-09-02: the parser-gap fix below moved this from the previously-reported p=0.0998/"tie" to a real, if modest, Qwen3 advantage — of 143 disagreements, Qwen3 wins 88, Hammer 55).
+- **Win Rate**, Qwen3-Instruct vs. Hammer: **Qwen3-4B-Instruct has a real, statistically significant advantage.** McNemar's exact test, p ≈ 0.00000. Of 390 examples where the two models disagree, Qwen3 wins 278 and Hammer wins only 112.
+- **F1 Func/Param**: Hammer is numerically ahead (0.971/0.700 vs. 0.975/0.739 corrected — now essentially tied, in fact Qwen3 nominally ahead), but this metric was independently found to be structurally unstable (see below) — no significance test is reported for it because the metric itself isn't trusted enough to warrant one.
 
-Since Win Rate is the execution-based metric this report otherwise treats as most trustworthy, the v3 summary was: **Qwen3-4B-Instruct (4B, general-purpose, 2025) reaches the correct final answer significantly more often than Hammer2.0-7b (7B, purpose-built for function calling, 2024), even though it doesn't reproduce Hammer's exact call sequence any more often than chance would predict.** That finding still stands — it's just no longer the most important one in this report.
+Since Win Rate is the execution-based metric this report otherwise treats as most trustworthy, the v3 summary was: **Qwen3-4B-Instruct (4B, general-purpose, 2025) reaches the correct final answer significantly more often than Hammer2.0-7b (7B, purpose-built for function calling, 2024).** The original second half of this claim — "even though it doesn't reproduce Hammer's exact call sequence any more often than chance would predict" — no longer holds after the v6 parser-gap correction: Qwen3 has a small but real edge there too (p=0.0072), not a tie. The core finding (Qwen3 ahead on Win Rate) still stands, and is now less qualified than before — it's just no longer the most important finding in this report.
 
 ## Full results — all 8 configurations
 
@@ -76,16 +127,16 @@ Since Win Rate is the execution-based metric this report otherwise treats as mos
 |---|---|---|---|---|---|---|
 | Hammer2.0-7b | 3-shot | 0.971 | 0.700 | 0.290 | 0.217 | 0.253 |
 | Hammer2.0-7b | 1-shot | 0.967 | 0.495 | 0.208 | 0.070 | 0.159 |
-| Qwen3-4B-Instruct-2507 | 3-shot | 0.855 | 0.658 | 0.290 | 0.207 | 0.318 |
-| Qwen3-4B-Instruct-2507 | 1-shot | 0.803 | 0.405 | 0.191 | 0.042 | 0.178 |
+| Qwen3-4B-Instruct-2507 | 3-shot | 0.975 | 0.739 | 0.320 | 0.234 | 0.342 |
+| Qwen3-4B-Instruct-2507 | 1-shot | 0.970 | 0.478 | 0.215 | 0.048 | 0.183 |
 | xLAM-7b-fc-r | 3-shot | 0.923 | 0.590 | 0.230 | 0.144 | 0.140 |
 | xLAM-7b-fc-r | 1-shot | 0.846 | 0.389 | 0.147 | 0.005 | 0.027 |
 | **Qwen3-4B-Thinking-2507** | **3-shot** | **0.951** | **0.739** | **0.385** | **0.263** | **0.759** |
 | **Qwen3-4B-Thinking-2507** | **1-shot** | **0.934** | **0.513** | **0.289** | **0.092** | **0.606** |
 
-*F1 columns: internally comparable only (see below) — not comparable to the paper's Table 1.
+*F1 columns: internally comparable only (see below) — not comparable to the paper's Table 1. Qwen3-Instruct rows corrected 2026-09-02 — see the v6 parser-gap section above.
 
-Qwen3-Thinking's Win Rate (0.759) is roughly **3× Hammer's** and **2.4× Instruct's**, and its Full Acc (0.263) is the best of any configuration tested, matched or paper-original.
+Qwen3-Thinking's Win Rate (0.759) is roughly **2.2× Hammer's** and **2.2× Instruct's**, and its Full Acc (0.263) is the best of any configuration tested, matched or paper-original.
 
 ## xLAM-7b-fc-r as a third paper anchor — another clean validation
 
@@ -111,25 +162,25 @@ Both models: EC2 g5.xlarge (NVIDIA A10G, 23GB), bf16, `max_model_len=8192`, `gpu
 
 | Model | Shots | F1 Func* | F1 Param* | Partial Acc | Full Acc | Win Rate |
 |---|---|---|---|---|---|---|
-| Hammer2.0-7b | 3-shot | **0.971** | **0.700** | 0.290 | **0.217** | 0.253 |
-| Qwen3-4B-Instruct-2507 | 3-shot | 0.855 | 0.658 | 0.290 | 0.207 | **0.318** |
-| Hammer2.0-7b | 1-shot | **0.967** | **0.495** | **0.208** | **0.070** | **0.159** |
-| Qwen3-4B-Instruct-2507 | 1-shot | 0.803 | 0.405 | 0.191 | 0.042 | 0.178 |
+| Hammer2.0-7b | 3-shot | 0.971 | **0.700** | 0.290 | 0.217 | 0.253 |
+| Qwen3-4B-Instruct-2507 | 3-shot | **0.975** | 0.739 | **0.320** | **0.234** | **0.342** |
+| Hammer2.0-7b | 1-shot | **0.967** | 0.495 | 0.208 | 0.070 | 0.159 |
+| Qwen3-4B-Instruct-2507 | 1-shot | 0.970 | **0.478** | **0.215** | **0.048** | **0.183** |
 
-*F1 columns: internally comparable only (see "why F1 is unreliable" below) — not comparable to the paper's Table 1.
+*F1 columns: internally comparable only (see "why F1 is unreliable" below) — not comparable to the paper's Table 1. Qwen3 rows corrected 2026-09-02, see the v6 parser-gap section above.
 
-**Paired significance tests (McNemar's exact, 3-shot, n=1861), run on two different outcome definitions:**
+**Paired significance tests (McNemar's exact, 3-shot, n=1861), run on two different outcome definitions (corrected 2026-09-02):**
 
 | Outcome tested | Both right | Both wrong | Hammer-only-right | Qwen3-only-right | p-value | Verdict |
 |---|---|---|---|---|---|---|
-| Full Sequence Match (exact names + args) | 302 | 1380 | 101 | 78 | 0.0998 | Not significant — genuine tie |
-| Win Rate (execution-based) | 328 | 1127 | 142 | 264 | ≈0.00000 | **Significant — Qwen3 ahead** |
+| Full Sequence Match (exact names + args) | 348 | 1370 | 55 | 88 | 0.0072 | **Significant — small Qwen3 edge** (previously reported as a tie, p=0.0998, before the v6 correction) |
+| Win Rate (execution-based) | 358 | 1113 | 112 | 278 | ≈0.00000 | **Significant — Qwen3 ahead** |
 
-These two tests disagree with each other, and that disagreement is itself the finding: whether the models look "tied" depends entirely on which correctness definition is used. Full Sequence Match is the strictest, most syntax-sensitive metric (penalizes any deviation from the gold call order/arguments, even a mathematically equivalent one); Win Rate is the most semantically meaningful one (did the answer come out right). By the metric this report otherwise argues is most trustworthy, Qwen3 wins outright, not by a tie.
+These two tests now agree with each other on direction, though not on how close the race is: Full Sequence Match shows a small, real Qwen3 edge (of 143 disagreements, Qwen3 wins 88 to Hammer's 55); Win Rate shows a much larger one (of 390 disagreements, Qwen3 wins 278 to Hammer's 112). Full Sequence Match is the strictest, most syntax-sensitive metric (penalizes any deviation from the gold call order/arguments, even a mathematically equivalent one); Win Rate is the most semantically meaningful one (did the answer come out right). By both metrics, Qwen3 is ahead — more decisively on the one this report otherwise argues is most trustworthy.
 
-**New this version — Hammer's 1-shot result**, which didn't exist before. Hammer degrades on 1-shot too (Full Acc 0.217→0.070, Win Rate 0.253→0.159) but noticeably less than Qwen3 does (0.207→0.042, 0.318→0.178). Both degrade for the identical reason (see refusal analysis below); Hammer's degradation is milder in degree, not different in kind.
+**New this version — Hammer's 1-shot result**, which didn't exist before. Hammer degrades on 1-shot too (Full Acc 0.217→0.070, Win Rate 0.253→0.159) but noticeably less than Qwen3 does (0.234→0.048, 0.342→0.183). Both degrade for the identical reason (see refusal analysis below); Hammer's degradation is milder in degree, not different in kind.
 
-**Consistency check against the earlier, non-matched runs:** Qwen3's numbers here (bf16/A10G/vLLM 0.8.5) are within noise of the original SageMaker run (fp16/T4/vLLM-LMI 0.8.4): 3-shot F1 Func 0.855 vs. 0.857, Win Rate 0.318 vs. 0.321. Hammer's numbers here (pinned revision, explicit batch/context settings) match the earlier ad hoc validation run almost exactly: F1 Func 0.971 vs. 0.971, Win Rate 0.253 vs. 0.251. **The infra confounds flagged in the audit (fp16 vs bf16, T4 vs A10G, batch size, unpinned revisions) turned out to have negligible real effect** — worth having checked, but not the thing that was actually distorting the earlier comparison.
+**Consistency check against the earlier, non-matched runs:** Qwen3's numbers here (bf16/A10G/vLLM 0.8.5) are within noise of the original SageMaker run (fp16/T4/vLLM-LMI 0.8.4), both corrected 2026-09-02 for the same parser gap: 3-shot F1 Func 0.975 vs. 0.975, Win Rate 0.342 vs. 0.344. Hammer's numbers here (pinned revision, explicit batch/context settings) match the earlier ad hoc validation run almost exactly: F1 Func 0.971 vs. 0.971, Win Rate 0.253 vs. 0.251. **The infra confounds flagged in the audit (fp16 vs bf16, T4 vs A10G, batch size, unpinned revisions) turned out to have negligible real effect** — worth having checked, but not the thing that was actually distorting the earlier comparison (that was the parser gap above, unrelated to infra).
 
 ## Why F1 numbers still aren't comparable to the paper (unchanged from v2, re-confirmed here)
 
@@ -155,11 +206,13 @@ NESTFUL blends MathQA arithmetic chains (1390/1861, 75%) with StarCoder2 coding-
 | Domain | n | Hammer 3-shot | Qwen3-Instruct 3-shot | Qwen3-Thinking 3-shot |
 |---|---|---|---|---|
 | Math | 1390 | 7.2% | 9.6% | **19.2%** |
-| Code | 471 | 91.1% | 80.7% | 89.2% |
+| Code | 471 | 91.1% | **92.8%** | 89.2% |
 
-Thinking improves on *both* domains over Instruct, most dramatically on math (9.6%→19.2%, roughly doubling) — the domain where all non-reasoning models struggle most. This is consistent with the mechanism: math-domain nested arithmetic benefits from working through the dependency chain step by step before committing to an answer, which is exactly what the reasoning phase provides and Direct Prompting (single-shot, no visible intermediate work) does not.
+(Qwen3-Instruct's code figure corrected 2026-09-02 from 80.7% — the parser gap above turns out to have been concentrated almost entirely in code-domain samples, plausibly because code-shaped queries prompt the model to reach for markdown formatting more than math queries do; math barely moved, 9.57% vs. the previously reported 9.6%.)
 
-Non-reasoning models (Hammer, Qwen3-Instruct, xLAM) struggle almost identically on math-domain exact ordering (arithmetic expressions admit multiple valid function orderings, e.g. `multiply→add` vs `add→multiply`, which strict sequence matching penalizes as wrong even when correct) and both do well on code-domain tasks. **Hammer has a clear edge specifically in the code domain** (likely closer to its function-calling training distribution); Qwen3 is roughly level or slightly ahead on math. This is the more precise, domain-aware version of the earlier "sequence composition is hard" takeaway.
+Thinking improves on math dramatically over Instruct (9.6%→19.2%, roughly doubling) — the domain where all non-reasoning models struggle most — but, after the correction, is no longer ahead of Instruct on code (89.2% vs. 92.8%). This is consistent with the mechanism: math-domain nested arithmetic benefits from working through the dependency chain step by step before committing to an answer, which is exactly what the reasoning phase provides and Direct Prompting (single-shot, no visible intermediate work) does not; code-domain exact sequencing apparently doesn't need that same step-by-step benefit for either model.
+
+Non-reasoning models (Hammer, Qwen3-Instruct, xLAM) struggle almost identically on math-domain exact ordering (arithmetic expressions admit multiple valid function orderings, e.g. `multiply→add` vs `add→multiply`, which strict sequence matching penalizes as wrong even when correct) and both do well on code-domain tasks. Corrected 2026-09-02: Qwen3-Instruct is now slightly *ahead* of Hammer in the code domain too (92.8% vs. 91.1%), reversing the earlier "Hammer has a clear edge in code" claim, which was an artifact of the same parser gap; Qwen3 is also ahead on math (9.6% vs. 7.2%). This is the more precise, domain-aware version of the earlier "sequence composition is hard" takeaway.
 
 ## Refusal behavior — now explained, not just counted
 
@@ -185,8 +238,8 @@ The prior audit flagged two suspected `calculate_win_score` equality bugs. On in
 |---|---|---|
 | Hammer, 3-shot | 0.253 | 0.253 |
 | Hammer, 1-shot | 0.159 | 0.159 |
-| Qwen3, 3-shot | 0.318 | 0.318 |
-| Qwen3, 1-shot | 0.178 | 0.178 |
+| Qwen3, 3-shot | 0.342 | 0.342 |
+| Qwen3, 1-shot | 0.183 | 0.183 |
 
 **Identical in all four cases.** The bug is real (verified with a synthetic unit test) but never actually triggers on NESTFUL's particular numeric answers. Reported honestly as a confirmed-but-inert finding rather than oversold as a correction that moved anything.
 
@@ -214,9 +267,10 @@ The prior audit flagged two suspected `calculate_win_score` equality bugs. On in
 
 ## Files
 
-- `matched_results/hammer_3shot/`, `hammer_1shot/`, `qwen3_3shot/`, `qwen3_1shot/`, `xlam_3shot/`, `xlam_1shot/`, `qwen3thinking_3shot/`, `qwen3thinking_1shot/`, `hammer_3shot_checklist/`, `xlam_3shot_checklist/` — each with `output.jsonl` (generations) and `determinism_check.json`. Thinking runs also carry `generated_text_raw` (untouched, including the `<think>...</think>` block) alongside the stripped `generated_text` used for scoring; the two `*_checklist/` runs carry the full checklist-augmented prompt in `input` for every sample.
-- `scripts/run_matched.py` — the matched-infrastructure harness (identical prompt construction to the original run scripts, adds the built-in determinism check, and the `--checklist`/`--max_tokens` flags used for the v5 experiment)
-- `scripts/scorer_patched.py` — IBM's scorer with the one verified-inert bugfix applied, isolated via monkey-patch
+- `matched_results/hammer_3shot/`, `hammer_1shot/`, `qwen3_3shot/`, `qwen3_1shot/`, `xlam_3shot/`, `xlam_1shot/`, `qwen3thinking_3shot/`, `qwen3thinking_1shot/`, `hammer_3shot_checklist/`, `xlam_3shot_checklist/`, `qwen3_3shot_checklist/`, `qwen3thinking_3shot_checklist/` — each with `output.jsonl` (generations) and `determinism_check.json`. Thinking runs also carry `generated_text_raw` (untouched, including the `<think>...</think>` block) alongside the stripped `generated_text` used for scoring; the `*_checklist/` runs carry the full checklist-augmented prompt in `input` for every sample.
+- `scripts/run_matched.py` — the matched-infrastructure harness (identical prompt construction to the original run scripts, adds the built-in determinism check, and the `--checklist`/`--max_tokens` flags used for the v5/v6 experiments)
+- `viewer/score_all.py` — the per-sample rescoring pipeline; as of 2026-09-02 strips ` ```<language> ` fences (not just bare ` ``` `), the fix behind the v6 correction above
+- `scripts/scorer_patched.py` — IBM's scorer with one earlier verified-inert bugfix (int/float equality) applied, isolated via monkey-patch
 - `scripts/analyze_matched.py` — domain split, refusal-domain correlation, McNemar test
 - Prior-version artifacts retained for provenance: `results/nestful_3/`, `results/nestful_1/` (original SageMaker/T4 Qwen3 runs), `results/validation_hammer2.0-7b/` (first ad hoc Hammer validation)
 
@@ -224,7 +278,7 @@ To rescore: clone `github.com/IBM/NESTFUL`, add `'Qwen3-4B-Instruct-2507'` to th
 
 ## Takeaways for the benchmark work
 
-1. **Reasoning before acting is the single largest effect measured in this entire investigation** — larger than model choice, larger than infra confounds, larger than any prompt-template decision. Same architecture, same weights family, same prompts, same everything except a reasoning phase: Win Rate goes from 0.318 to 0.759. Any benchmark design should treat "was the model allowed to think" as a first-class experimental variable, not an afterthought.
+1. **Reasoning before acting is the single largest effect measured in this entire investigation** — larger than model choice, larger than infra confounds, larger than any prompt-template decision. Same architecture, same weights family, same prompts, same everything except a reasoning phase: Win Rate goes from 0.342 to 0.759. Any benchmark design should treat "was the model allowed to think" as a first-class experimental variable, not an afterthought.
 2. **A budget cap silently manufactures a false negative, and it looks exactly like a capability failure until checked.** The 4096-token attempt didn't error — it produced a plausible, lower, wrong number (0.506) that would have been reported as final if not checked against the raw generation text. Any benchmark involving reasoning models needs an explicit truncation check, not just a parse-success check.
 3. **The result is metric-dependent, not a flat tie**, for the non-reasoning Instruct comparison — a tie on Full Sequence Match (p=0.10) but a significant Qwen3 win on Win Rate (p≈0.00000). Run a paired significance test on *every* metric being compared, not just one.
 4. **Refusal behavior is a first-class benchmark signal, not scorer noise** — concentrated almost entirely in the math domain (~97-99% across all four models and both shot counts) and the primary driver of 1-shot collapse. Track "declined to act" separately from "acted incorrectly."
@@ -234,3 +288,6 @@ To rescore: clone `github.com/IBM/NESTFUL`, add `'Qwen3-4B-Instruct-2507'` to th
 8. **Execution-based Win Rate remains the most defensible metric available in NESTFUL** for the cost-bounded corpus-QA benchmark design — it doesn't penalize valid-but-differently-ordered solutions the way sequence matching does, and it's the metric on which thinking mode's advantage is clearest and most consistent.
 9. **Read the logs before writing the prompt fix.** The complaint that triggered v5 ("wrong arguments") wasn't the dominant pattern once actually measured — missing labels and unjustified refusals were. A fix aimed at the wrong diagnosis would have looked reasonable and done little; the fix that worked came from counting the actual failure, not from the plausible-sounding guess. Same discipline that caught the truncation and stale-script issues earlier in this report.
 10. **A prompt fix that raises Win Rate can still lower Full Acc, in the same run, on the same model.** Hammer's checklist run is the clearest example (Win Rate +5.4pp, Full Acc −1.0pp) — "the model got better" isn't one number, and reporting only the metric that improved would have been a real, avoidable distortion.
+11. **A metric moving the "wrong" direction is a gift, not a nuisance — it's the thing that finds bugs.** The v6 parser-gap bug (three versions old, silently understating every Qwen3-Instruct number) was only found because the checklist experiment produced a surprising regression, which triggered a direct inspection of raw generations instead of accepting the number. A benchmark pipeline should treat every counter-intuitive result as a bug-finding opportunity before treating it as a finding.
+12. **"Strip markdown fences" is an easy instruction to get subtly wrong, and it's worth testing on more than one model.** IBM's own official parser's `.replace("```", "")` works for every model that emits bare ` ``` ` fences (Hammer, xLAM, Qwen3-Thinking) and silently breaks for the one that sometimes emits ` ```json `-tagged ones (Qwen3-Instruct) — a one-model blind spot that would have stayed invisible without a model that happened to trigger it.
+13. **A prompt fix validated on some models is not thereby validated on all of them.** The checklist helps 3 of 4 models here and measurably hurts the 4th (Qwen3-Instruct: Win Rate −1.6pp, Full Acc −2.5pp, both significant) via a real, traced mechanism (attempting previously-correctly-refused cases, and breaking some previously-correct answers) — not a fluke or a parsing artifact. "Works for Hammer and xLAM" was never evidence it would work for Qwen3-Instruct, and it didn't.

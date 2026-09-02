@@ -5,20 +5,45 @@ Emits one JSON blob per run with, for every sample: parsed prediction, official
 partial/full accuracy, execution-based win, the value the predicted call chain
 actually produced, and a diagnosis of why it differs from gold.
 """
-import io, json, os, signal, sys, importlib.util, contextlib
+import io, json, os, re, signal, sys, importlib.util, contextlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NESTFUL = os.path.join(HERE, "NESTFUL")
 sys.path.insert(0, os.path.join(HERE, "shim"))
 sys.path.insert(0, os.path.join(NESTFUL, "src"))
 
-from output_parsers import parse_Hammer2_0_7b, parse_xLAM_1b_fc_r   # noqa: E402
+from output_parsers import parse_Hammer2_0_7b as _orig_parse_Hammer2_0_7b   # noqa: E402
+from output_parsers import parse_xLAM_1b_fc_r as _orig_parse_xLAM_1b_fc_r   # noqa: E402
 from utils import post_process_api_with_args             # noqa: E402
 from sklearn.metrics import accuracy_score               # noqa: E402
 
 EXEC_DIR = os.path.join(NESTFUL, "data_v2", "executable_functions")
 RUN_ROOT = ("/Users/jakubbares/Library/CloudStorage/GoogleDrive-bares.jakub@gmail.com/"
             "My Drive/CIIRC PhD/FIrst-Effort/nestful-qwen3-4b")
+
+# IBM's own parsers strip fences with .replace("```", ""), which leaves a
+# leading language tag behind (e.g. "```json\n[...]" -> "json\n[...]",
+# invalid JSON). Confirmed on 2026-09-02 by direct inspection of raw
+# generations: Qwen3-4B-Instruct (never Hammer/xLAM/Qwen3-Thinking) sometimes
+# emits ```json-tagged fences, including in the already-published qwen3_3shot
+# baseline (60/1861 = 3.2%) - understating its Win/Full/Partial by ~2.4-3pp
+# in every prior version of this report. Verified inert (exactly 0.0 diff on
+# every metric) against every Hammer/xLAM/Qwen3-Thinking run before adopting
+# this as the scoring parser everywhere - see REPORT.md's correction note.
+_FENCE_TAG = re.compile(r"```[a-zA-Z]*")
+
+
+def parse_Hammer2_0_7b(item, num_errors_parsing_pred_intent, skip_grounding=False):
+    item = dict(item)
+    item["generated_text"] = _FENCE_TAG.sub("", item["generated_text"]).strip()
+    return _orig_parse_Hammer2_0_7b(item, num_errors_parsing_pred_intent, skip_grounding)
+
+
+def parse_xLAM_1b_fc_r(item, num_errors_parsing_pred_intent, skip_grounding=False):
+    item = dict(item)
+    item["generated_text"] = _FENCE_TAG.sub("", item["generated_text"]).strip()
+    return _orig_parse_xLAM_1b_fc_r(item, num_errors_parsing_pred_intent, skip_grounding)
+
 
 # Third element is the output_parsers.py function for that model's native
 # output format. xLAM emits {"tool_calls": [...]}, not Hammer's bare list -
@@ -37,6 +62,8 @@ RUNS = [
     ("qwen3thinking_1shot", "matched_results/qwen3thinking_1shot/output.jsonl", parse_Hammer2_0_7b),
     ("hammer_3shot_checklist", "matched_results/hammer_3shot_checklist/output.jsonl", parse_Hammer2_0_7b),
     ("xlam_3shot_checklist",   "matched_results/xlam_3shot_checklist/output.jsonl", parse_xLAM_1b_fc_r),
+    ("qwen3_3shot_checklist", "matched_results/qwen3_3shot_checklist/output.jsonl", parse_Hammer2_0_7b),
+    ("qwen3thinking_3shot_checklist", "matched_results/qwen3thinking_3shot_checklist/output.jsonl", parse_Hammer2_0_7b),
 ]
 
 # ---------------------------------------------------------------- executor ---
@@ -169,7 +196,7 @@ def score_run(path, parser=parse_Hammer2_0_7b):
         item = json.loads(line)
         pred_fc, gold_fc, pred_dl, gold_dl, _, parse_err = parser(dict(item), 0)
 
-        raw = item["generated_text"].replace("```", "").strip()
+        raw = _FENCE_TAG.sub("", item["generated_text"]).strip()
         if raw in ("[]", "[ ]"):
             refusal = True
         else:
